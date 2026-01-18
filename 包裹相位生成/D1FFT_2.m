@@ -16,11 +16,11 @@ x = (-N/2:N/2-1)*dx;
 % 2. 构造物体（圆形相位）
 % =============================
 phi0 = 2;    %相位=2pi*光程差/波长         
-%phi_obj = zeros(N);
+phi_obj = zeros(N);
 
 r0 = 0.6e-3;
-%phi_obj(X.^2 + Y.^2 <= r0^2) = phi0;
-phi_obj = generate_y_shape_step_phase(N, N, 150, 45, 2);
+phi_obj(X.^2 + Y.^2 <= r0^2) = phi0;
+%phi_obj = generate_y_shape_step_phase(N, N, 150, 45, 2);
 
 
 O = exp(1i*phi_obj); 
@@ -47,10 +47,10 @@ center = N/2 + 1;
 
 % ---- 1D 频谱能量统计（沿 v 方向）----
 spec_u = mean(abs(H), 1);   % 对每一列求均值（稳健，抗噪）
-spec_u = spec_u(:).';       % 行向量
+spec_u = spec_u(:)';       % 行向量
 
 % ---- 屏蔽零级（DC）----
-dc_half_width = 20;         % DC 抑制宽度（像素，可调）
+dc_half_width = 30;         % DC 抑制宽度（像素，可调）
 spec_u(center-dc_half_width : center+dc_half_width) = 0;
 
 % ---- 自动寻找 +1 级峰值 ----
@@ -75,8 +75,8 @@ grid on;
 %% =============================
 % 1D 矩形频域滤波器
 % =============================
-rect_width = 60;    % u 方向宽度（像素）
-rect_height = 500;
+rect_width = 70;    % u 方向宽度（像素）
+rect_height = 512;
 u = (1:N) - center;
 v = (1:N) - center;
 [U, V] = meshgrid(u, v); 
@@ -91,9 +91,13 @@ Rect_1D( abs(U - u_c) <= rect_width/2 & ...
     abs(V - v_c) <= rect_height/2 ) = 1;
 % 扩展为 2D（对所有 y 行相同）
 %Rect_1D = repmat(Rect_1D, N, 1);
+% ----------- 高斯窗滤波器设计 -----------
+sigma = 20;    % 频域高斯窗口宽度
+
+G = exp(-((U-(u0-center)).^2 + (V-(v0-center)).^2) / (2*sigma^2));
 
 % 频域滤波
-Hf = H .* Rect_1D;
+Hf = H .* Rect_1D .*G;
 
 % 显示原始和滤波信息
 figure;
@@ -135,6 +139,12 @@ U = ifft(Hf_center, [], 2);
 
 amp = abs(U);
 phi_wrapped = angle(U);
+
+%% =============================
+% 8. 最小二乘相位解包裹（替换原相位解包裹）
+% =============================
+phi_unwrap = least_squares_unwrap_1d_corrected(phi_wrapped, 1); 
+
 figure;
 subplot(2,2,1);
 imagesc(log(1+abs(Hf_center)));axis image off;
@@ -149,88 +159,22 @@ title('重构幅度','FontName','SimHei');
 subplot(2,2,3);
 imagesc(phi_wrapped); axis image off;
 colormap jet; colorbar;
-title('包裹相位','FontName','SimHei');
+title('包裹相位（1D 重建）','FontName','SimHei');
 
 subplot(2,2,4);
-imagesc(phi_wrapped); axis image off;
-colormap jet; colorbar;
-title('包裹相位','FontName','SimHei');
-
-%% =============================
-% 8. 最小二乘相位解包裹（替换原相位解包裹）
-% =============================
-phi_unwrap = least_squares_unwrap(phi_wrapped);
-figure;
-subplot(1,2,1);
 imagesc(phi_unwrap); axis image off;
 colormap jet; colorbar;
-subplot(1,2,2);
-title('最小二乘解包裹相位','FontName','SimHei');
-skip = 8; % 每隔4个点显示一个，避免图像过于密集
-mesh(X(1:skip:end, 1:skip:end)*1000, ...
-     Y(1:skip:end, 1:skip:end)*1000, ...
-     phi_unwrap(1:skip:end, 1:skip:end));
-xlabel('X (mm)');
-ylabel('Y (mm)');
-zlabel('相位 (rad)');
-title('解包裹相位三维网格显示 (mesh)','FontName','SimHei');
-colormap jet;
-colorbar;
-view(30, 40);
-grid on;
-%% =============================
-% 9. 倾斜平面校正
-% =============================
-% 使用背景区域拟合倾斜平面
-% 创建背景掩模（假设物体在中心，边缘是背景）
-background_mask = zeros(N);
-border_width = 30; % 边缘宽度
-background_mask(1:border_width, :) = 1;
-background_mask(end-border_width+1:end, :) = 1;
-background_mask(:, 1:border_width) = 1;
-background_mask(:, end-border_width+1:end) = 1;
+title('1D 解包裹相位（沿 Y）','FontName','SimHei');
 
-% 提取背景点的坐标和相位值
-bg_points = find(background_mask);
-bg_X = X(bg_points);
-bg_Y = Y(bg_points);
-bg_phi = phi_unwrap(bg_points);
 
-% 最小二乘拟合平面：phi = a*x + b*y + c
-A = [bg_X(:), bg_Y(:), ones(length(bg_X), 1)];
-coeffs = A \ bg_phi(:); % 求解系数
-a = coeffs(1);
-b = coeffs(2);
-c = coeffs(3);
+% 可视化
+center_idx = N/2+1 ;
+phase_x = phi_unwrap(center_idx , :);  % 第center_idx行的所有列
+phase_y = phi_unwrap(:, center_idx);  % 第center_idx列的所有行
 
-% 计算拟合的倾斜平面
-phi_tilt = a*X + b*Y + c;
+x_coord = X(center_idx , :);    % 对应的x坐标（单位：米或毫米）
+y_coord = Y(:, center_idx);
 
-% 从解包裹相位中减去倾斜平面
-phi_corrected = phi_unwrap - phi_tilt;
-
-% 方法2：使用整个图像拟合平面（作为对比）
-A_full = [X(:), Y(:), ones(N*N, 1)];
-coeffs_full = A_full \ phi_unwrap(:);
-phi_tilt_full = coeffs_full(1)*X + coeffs_full(2)*Y + coeffs_full(3);
-phi_corrected_full = phi_unwrap - phi_tilt_full;
-
-%% =============================
-% 10. 边缘裁剪
-% =============================
-crop_pixels = 40; % 裁剪边缘像素数
-phi_cropped = phi_corrected(crop_pixels+1:end-crop_pixels, crop_pixels+1:end-crop_pixels);
-phi_cropped_full = phi_corrected_full(crop_pixels+1:end-crop_pixels, crop_pixels+1:end-crop_pixels);
-X_cropped = X(crop_pixels+1:end-crop_pixels, crop_pixels+1:end-crop_pixels);
-Y_cropped = Y(crop_pixels+1:end-crop_pixels, crop_pixels+1:end-crop_pixels);
-
-% 计算裁剪后的真实相位用于比较
-phi_obj_cropped = phi_obj(crop_pixels+1:end-crop_pixels, crop_pixels+1:end-crop_pixels);
-
-%% =============================
-% 11. 可视化结果
-% =============================
-% 原始解包裹相位（三维）
 figure;
 subplot(2,3,1);
 surf(X*1000, Y*1000, phi_unwrap, 'EdgeColor', 'none');
@@ -238,136 +182,18 @@ xlabel('X (mm)'); ylabel('Y (mm)'); zlabel('相位 (rad)');
 title('原始解包裹相位','FontName','SimHei');
 colormap jet; colorbar; view(30, 40); grid on;
 
-subplot(2,3,2);
-surf(X*1000, Y*1000, phi_tilt, 'EdgeColor', 'none');
-xlabel('X (mm)'); ylabel('Y (mm)'); zlabel('相位 (rad)');
-title('拟合倾斜平面','FontName','SimHei');
-colormap jet; colorbar; view(30, 40); grid on;
-
-subplot(2,3,3);
-surf(X*1000, Y*1000, phi_corrected, 'EdgeColor', 'none');
-xlabel('X (mm)'); ylabel('Y (mm)'); zlabel('相位 (rad)');
-title('倾斜校正后相位','FontName','SimHei');
-colormap jet; colorbar; view(30, 40); grid on;
-
-subplot(2,3,4);
-imagesc(phi_unwrap); axis image off;
-colormap jet; colorbar;
-title('原始解包裹相位(2D)','FontName','SimHei');
-
-subplot(2,3,5);
-imagesc(phi_corrected); axis image off;
-colormap jet; colorbar;
-title('倾斜校正后相位(2D)','FontName','SimHei');
-
-subplot(2,3,6);
-imagesc(phi_cropped); axis image off;
-colormap jet; colorbar;
-title('裁剪后校正相位','FontName','SimHei');
-
-% 裁剪后的三维显示
-figure;
-subplot(2,2,1);
-surf(X_cropped*1000, Y_cropped*1000, phi_cropped, 'EdgeColor', 'none');
-xlabel('X (mm)'); ylabel('Y (mm)'); zlabel('相位 (rad)');
-title('裁剪后校正相位(3D)','FontName','SimHei');
-colormap jet; colorbar; view(30, 40); grid on;
-
-subplot(2,2,2);
-imagesc(phi_cropped); axis image off;
-colormap jet; colorbar;
-title('裁剪后校正相位(2D)','FontName','SimHei');
-
-subplot(2,2,3);
-surf(X_cropped*1000, Y_cropped*1000, phi_cropped_full, 'EdgeColor', 'none');
-xlabel('X (mm)'); ylabel('Y (mm)'); zlabel('相位 (rad)');
-title('全图拟合校正相位(3D)','FontName','SimHei');
-colormap jet; colorbar; view(30, 40); grid on;
-
-subplot(2,2,4);
-imagesc(phi_obj_cropped); axis image off;
-colormap jet; colorbar;
-title('裁剪后真实相位(参考)','FontName','SimHei');
-%% =============================
-% 12. 定量评估
-% =============================
-% 计算相位误差
-phase_error = phi_cropped - phi_obj_cropped;
-phase_error_full = phi_cropped_full - phi_obj_cropped;
-
-% 计算统计指标
-fprintf('===== 相位重建质量评估 =====\n');
-fprintf('拟合倾斜平面系数: a=%.6f, b=%.6f, c=%.6f\n', a, b, c);
-fprintf('全图拟合倾斜平面系数: a=%.6f, b=%.6f, c=%.6f\n', coeffs_full(1), coeffs_full(2), coeffs_full(3));
-fprintf('边缘裁剪像素数: %d\n', crop_pixels);
-fprintf('校正后相位范围: %.4f ~ %.4f rad\n', min(phi_cropped(:)), max(phi_cropped(:)));
-fprintf('真实相位范围: %.4f ~ %.4f rad\n', min(phi_obj_cropped(:)), max(phi_obj_cropped(:)));
-fprintf('背景区域校正RMSE: %.6f rad\n', sqrt(mean(phase_error(:).^2)));
-fprintf('全图拟合校正RMSE: %.6f rad\n', sqrt(mean(phase_error_full(:).^2)));
-
-%% =============================
-% X方向（水平）一维相位剖面
-% =============================
-% 假设已有校正裁剪后的相位图 phi_cropped 和坐标 X_cropped, Y_cropped
-% 尺寸：Nc × Nc（裁剪后的尺寸）
-
-Nc = size(phi_cropped, 1);
-center_idx = floor(Nc/2) + 1;  % 中心索引
-
-% 提取水平中心线
-phase_x = phi_cropped(center_idx, :);  % 第center_idx行的所有列
-x_coord = X_cropped(center_idx, :);    % 对应的x坐标（单位：米或毫米）
-
-% 转换为毫米显示
-x_coord_mm = x_coord * 1000;  % 米→毫米
-
-% 绘制水平方向相位剖面
-figure('Position', [100, 100, 800, 400]);
-subplot(1,2,1);
-plot(x_coord_mm, phase_x, 'b-', 'LineWidth', 2);
+subplot(2,3,2);% 绘制水平方向相位剖面
+plot(x_coord, phase_x, 'b-', 'LineWidth', 2);
 xlabel('X 位置 (mm)', 'FontSize', 12, 'FontName', 'SimHei');
 ylabel('相位 (rad)', 'FontSize', 12, 'FontName', 'SimHei');
 title('水平方向 (X) 相位剖面', 'FontSize', 14, 'FontName', 'SimHei');
 grid on;
-xlim([min(x_coord_mm), max(x_coord_mm)]);
+xlim([min(x_coord), max(x_coord)]);
 
-% 在原图中标记提取线
-subplot(1,2,2);
-imagesc(X_cropped(1,:)*1000, Y_cropped(:,1)'*1000, phi_cropped);
-hold on;
-plot(x_coord_mm, zeros(size(x_coord_mm)), 'r-', 'LineWidth', 3);
-xlabel('X (mm)', 'FontSize', 12, 'FontName', 'SimHei');
-ylabel('Y (mm)', 'FontSize', 12, 'FontName', 'SimHei');
-title('提取线位置', 'FontSize', 14, 'FontName', 'SimHei');
-colormap jet; colorbar;
-axis image;
-% ============================
-% Y方向（垂直）一维相位剖面
-% =============================
-% 提取垂直中心线
-phase_y = phi_cropped(:, center_idx);  % 第center_idx列的所有行
-y_coord = Y_cropped(:, center_idx);    % 对应的y坐标
-
-% 转换为毫米显示
-y_coord_mm = y_coord * 1000;
-
-% 绘制垂直方向相位剖面
-figure('Position', [100, 100, 800, 400]);
-subplot(1,2,1);
-plot(y_coord_mm, phase_y, 'r-', 'LineWidth', 2);
+subplot(2,3,3);% 绘制垂直方向相位剖面
+plot(y_coord, phase_y, 'r-', 'LineWidth', 2);
 xlabel('Y 位置 (mm)', 'FontSize', 12, 'FontName', 'SimHei');
 ylabel('相位 (rad)', 'FontSize', 12, 'FontName', 'SimHei');
 title('垂直方向 (Y) 相位剖面', 'FontSize', 14, 'FontName', 'SimHei');
 grid on;
-xlim([min(y_coord_mm), max(y_coord_mm)]);
-
-% 在原图中标记提取线
-subplot(1,2,2);
-imagesc(X_cropped(1,:)*1000, Y_cropped(:,1)'*1000, phi_cropped);
-hold on;
-plot(zeros(size(y_coord_mm)), y_coord_mm, 'g-', 'LineWidth', 3);
-xlabel('X (mm)', 'FontSize', 12, 'FontName', 'SimHei');
-ylabel('Y (mm)', 'FontSize', 12, 'FontName', 'SimHei');
-title('提取线位置', 'FontSize', 14, 'FontName', 'SimHei');
-colormap jet; colorbar;
-axis image;
+xlim([min(y_coord), max(y_coord)]);
