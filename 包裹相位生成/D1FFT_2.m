@@ -6,7 +6,7 @@ clear; clc; close all;
 % 1. 参数设置
 % =============================
 N = 512;                 % 图像尺寸
-dx = 6.5e-6;             % 像元尺寸 (m)
+dx = 3.5e-6;             % 像元尺寸 (m)
 lambda = 632.8e-9;       % 波长
 k = 2*pi/lambda;
 
@@ -15,19 +15,47 @@ x = (-N/2:N/2-1)*dx;
 %% =============================
 % 2. 构造物体（圆形相位）
 % =============================
-phi0 = 2;    %相位=2pi*光程差/波长         
+phi0 = 1.5;    %相位=2pi*光程差/波长         
+
+% r0 = 0.6e-3;
+% phi_obj(X.^2 + Y.^2 <= r0^2) = phi0;
+% phi_obj = generate_y_shape_step_phase(N, N, 150, 45, 2);
 phi_obj = zeros(N);
 
-r0 = 0.6e-3;
-phi_obj(X.^2 + Y.^2 <= r0^2) = phi0;
-%phi_obj = generate_y_shape_step_phase(N, N, 150, 45, 2);
+% ---- 相位值 ----
+phi_c = 0.2*pi;   % 中心
+phi_u = 0.6*pi;   % 上
+phi_d = 0.5*pi;   % 下
+phi_l = 0.3*pi;   % 左
+phi_r = 0.4*pi;   % 右
 
+% ---- 矩形尺寸 ----
+rect_w = 0.4e-3;   % x 方向宽度
+rect_h = 0.3e-3;   % y 方向高度
+% ---- 中心间距 ----
+d = 0.55e-3;
 
-O = exp(1i*phi_obj); 
+% ---- 中心矩形 ----
+phi_obj( abs(X)<=rect_w/2 & abs(Y)<=rect_h/2 ) = phi_c;
+
+% ---- 上矩形 ----
+phi_obj( abs(X)<=rect_w/2 & abs(Y-d)<=rect_h/2 ) = phi_u;
+
+% ---- 下矩形 ----
+phi_obj( abs(X)<=rect_w/2 & abs(Y+d)<=rect_h/2 ) = phi_d;
+
+% ---- 左矩形 ----
+phi_obj( abs(X+d)<=rect_w/2 & abs(Y)<=rect_h/2 ) = phi_l;
+
+% ---- 右矩形 ----
+phi_obj( abs(X-d)<=rect_w/2 & abs(Y)<=rect_h/2 ) = phi_r;
+
+O = exp(1i * phi_obj);
+
 %% =============================
 % 3. 离轴参考光
 % =============================
-theta_x = 1*pi/180;
+theta_x = 1.5*pi/180;
 theta_y = 0*pi/180;
 
 R = exp(1i * k * (sin(theta_x) * X + sin(theta_y) * Y));
