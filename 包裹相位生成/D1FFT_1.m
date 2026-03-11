@@ -12,6 +12,8 @@ k = 2*pi/lambda;
 
 x = (-N/2:N/2-1)*dx;
 [X,Y] = meshgrid(x,x);
+noise = 0.02;
+noise_pha = noise * randn(N,N);
 %% =============================
 % 2. 构造物体（圆形相位）
 % =============================
@@ -23,11 +25,11 @@ phi0 = 1.5;    %相位=2pi*光程差/波长
 phi_obj = zeros(N);
 
 % ---- 相位值 ----
-phi_c = 0.2*pi;   % 中
-phi_u = 0.6*pi;   % 上
-phi_d = 0.5*pi;   % 下
-phi_l = 0.3*pi;   % 左 
-phi_r = 0.4*pi;   % 右 最右边的原始相位是1.2566 中心是1.2543 插值是0.0023
+phi_c = 0.2*pi;   % 中 0.6283
+phi_u = 0.6*pi;   % 上 1.8850
+phi_d = 0.5*pi;   % 下 1.5708
+phi_l = 0.3*pi;   % 左 0.9425
+phi_r = 0.4*pi;   % 右 1.2566
 
 % ---- 矩形尺寸 ----
 rect_w = 0.3e-3;   % x 方向宽度
@@ -50,8 +52,7 @@ phi_obj( abs(X+d)<=rect_w/2 & abs(Y)<=rect_h/2 ) = phi_l;
 % ---- 右矩形 ----
 phi_obj( abs(X-d)<=rect_w/2 & abs(Y)<=rect_h/2 ) = phi_r;
 
-O = exp(1i * phi_obj);
-
+O = exp(1i * (phi_obj+noise_pha));
 
 %% =============================
 % 3. 离轴参考光
@@ -146,7 +147,7 @@ for i = 1:N
     end
 end
 % 频域滤波
-Hf = H .* Rect_1D .* G;%32是sigima = 0
+Hf = H .* Rect_1D .* 1;%32是sigima = 0
 
 % 显示原始和滤波信息
 figure;
@@ -285,5 +286,113 @@ grid on;
 xlim([1 N])
 
 
+%% =============================
+% 垂直方向(Y)相位剖面 吉布斯振荡剔除 + 台阶+背景均值替代（含底部/顶部背景）
+% 核心逻辑：台阶-剔除边缘振荡像素求均值；背景-剔除靠近台阶的振荡像素求均值
+% =============================
+% 1. 核心参数提取（与原代码一致，无需修改）
+N = 512;
+dy = 3.5e-6;
+rect_h = 0.3e-3;   % 矩形高度
+d = 0.55e-3;       % 上下矩形与中心的间距
+rect_height = 100; % 频域垂直滤波器宽度（决定振荡区域）
+center_idx = N/2 + 1;
+phase_y_original = phase_y; % 保存原始相位剖面，用于对比
+phase_y_processed = phase_y;% 初始化处理后的相位剖面
 
+% 2. 计算吉布斯振荡区域的单侧像素数delta_N（维基数学定义/工程定义可切换）
+delta_N = round(N/(2*rect_height)); % 维基定义（过冲峰值），推荐
+% delta_N = round(N/rect_height);   % 工程定义（sinc零点，更大振荡区），按需切换
+fprintf('垂直方向吉布斯振荡单侧剔除像素数：delta_N = %d\n', delta_N);
 
+% 3. 计算垂直方向【3个台阶+背景区】的像素范围（行索引1~N）
+h_pix = round(rect_h/(2*dy));  % 单个矩形的半高像素数
+d_pix = round(d/dy);           % 上下矩形与中心的垂直间距像素数
+
+% --- 3.1 三个台阶的像素范围（原逻辑保留）---
+idx_center = (1:N) >= (center_idx - h_pix) & (1:N) <= (center_idx + h_pix); % 中心台阶
+idx_up = (1:N) >= (center_idx + d_pix - h_pix) & (1:N) <= (center_idx + d_pix + h_pix); % 上台阶
+idx_down = (1:N) >= (center_idx - d_pix - h_pix) & (1:N) <= (center_idx - d_pix + h_pix); % 下台阶
+idx_all_steps = idx_center | idx_up | idx_down; % 所有台阶的合并范围
+
+% --- 3.2 背景区（含底部+顶部）：排除所有台阶的区域 ---
+idx_bg = ~idx_all_steps;  % 整体背景（下台阶下方=底部，上台阶上方=顶部）
+% 背景区细分（可选，便于单独处理）
+idx_bg_bottom = idx_bg & (1:N) < (center_idx - d_pix - h_pix); % 底部背景（下台阶下）
+idx_bg_top = idx_bg & (1:N) > (center_idx + d_pix + h_pix);   % 顶部背景（上台阶上）
+
+% 4. 台阶区处理（原逻辑完全保留，兼容空索引判断）
+% --- 4.1 中心台阶 ---
+idx_center_core = idx_center & (1:N) >= (center_idx - h_pix + delta_N) & (1:N) <= (center_idx + h_pix - delta_N);
+if sum(idx_center_core) > 0
+    avg_center = mean(phase_y(idx_center_core));
+    phase_y_processed(idx_center) = avg_center;
+    fprintf('中心台阶非振荡区平均相位：%.4f rad\n', avg_center);
+else
+    avg_center = mean(phase_y(idx_center));
+    phase_y_processed(idx_center) = avg_center;
+    warning('中心台阶非振荡区像素数为0，使用整个台阶均值');
+end
+% --- 4.2 上台阶 ---
+idx_up_core = idx_up & (1:N) >= (center_idx + d_pix - h_pix + delta_N) & (1:N) <= (center_idx + d_pix + h_pix - delta_N);
+if sum(idx_up_core) > 0
+    avg_up = mean(phase_y(idx_up_core));
+    phase_y_processed(idx_up) = avg_up;
+    fprintf('上台阶非振荡区平均相位：%.4f rad\n', avg_up);
+else
+    avg_up = mean(phase_y(idx_up));
+    phase_y_processed(idx_up) = avg_up;
+    warning('上台阶非振荡区像素数为0，使用整个台阶均值');
+end
+% --- 4.3 下台阶 ---
+idx_down_core = idx_down & (1:N) >= (center_idx - d_pix - h_pix + delta_N) & (1:N) <= (center_idx - d_pix + h_pix - delta_N);
+if sum(idx_down_core) > 0
+    avg_down = mean(phase_y(idx_down_core));
+    phase_y_processed(idx_down) = avg_down;
+    fprintf('下台阶非振荡区平均相位：%.4f rad\n', avg_down);
+else
+    avg_down = mean(phase_y(idx_down));
+    phase_y_processed(idx_down) = avg_down;
+    warning('下台阶非振荡区像素数为0，使用整个台阶均值');
+end
+
+% 5. 【新增】背景区（底部+顶部）吉布斯振荡处理（和台阶逻辑一致）
+% 剔除背景区中靠近台阶边缘的delta_N个振荡像素，取核心背景区求均值
+idx_bg_core = idx_bg & ...
+    ( (1:N) < (center_idx - d_pix - h_pix - delta_N) | ...  % 底部背景：远离下台阶delta_N像素
+      (1:N) > (center_idx + d_pix + h_pix + delta_N) );     % 顶部背景：远离上台阶delta_N像素
+if sum(idx_bg_core) > 0
+    avg_bg = mean(phase_y(idx_bg_core));  % 核心背景区均值（底部+顶部统一）
+    phase_y_processed(idx_bg) = avg_bg;   % 均值替代整个背景区（底部+顶部）
+    fprintf('背景区（底部+顶部）非振荡区平均相位：%.4f rad\n', avg_bg);
+else
+    avg_bg = mean(phase_y(idx_bg));       % 降级：整个背景区均值
+    phase_y_processed(idx_bg) = avg_bg;
+    warning('背景区非振荡区像素数为0，使用整个背景区均值');
+end
+
+% 6. 绘制对比图【新增背景区标注】，保留所有原标注
+figure('Position', [100, 200, 1000, 600], 'Name', '垂直Y相位剖面-吉布斯振荡处理（含底部背景）');
+plot(1:N, phase_y_original, 'b-', 'LineWidth', 1.5, 'DisplayName', '原始剖面（含吉布斯振荡）');
+hold on; grid on;
+plot(1:N, phase_y_processed, 'r-', 'LineWidth', 2, 'DisplayName', '处理后剖面（台阶+背景去振荡）');
+
+% 标注：台阶中心+背景区边界
+xline(center_idx, 'k--', 'LineWidth', 1, 'DisplayName', '中心轴');
+xline(center_idx+d_pix, 'g--', 'LineWidth', 1, 'DisplayName', '上台阶中心');
+xline(center_idx-d_pix, 'm--', 'LineWidth', 1, 'DisplayName', '下台阶中心');
+xline(center_idx - d_pix - h_pix, 'c-.' , 'LineWidth', 1.2, 'DisplayName', '底部背景/下台阶分界');
+xline(center_idx + d_pix + h_pix, 'y-.' , 'LineWidth', 1.2, 'DisplayName', '顶部背景/上台阶分界');
+
+xlabel('Y方向像素索引', 'FontName', 'SimHei', 'FontSize', 12);
+ylabel('相位 (rad)', 'FontName', 'SimHei', 'FontSize', 12);
+title(sprintf('垂直Y相位剖面吉布斯处理（振荡剔除delta_N=%d，含底部/顶部背景）', delta_N), 'FontName', 'SimHei', 'FontSize', 14);
+legend('Location', 'best', 'FontName', 'SimHei');
+
+% 7. 输出台阶高度差（处理后，更精准，原逻辑保留）
+delta_phi_up_center = avg_up - avg_center; % 上-中心台阶高度差
+delta_phi_down_center = avg_down - avg_center; % 下-中心台阶高度差
+delta_phi_center_bg = avg_center - avg_bg; % 中心台阶-背景高度差（新增，评估台阶与背景的相对高度）
+fprintf('处理后-上台阶与中心台阶高度差：Δφ = %.4f rad\n', delta_phi_up_center);
+fprintf('处理后-下台阶与中心台阶高度差：Δφ = %.4f rad\n', delta_phi_down_center);
+fprintf('处理后-中心台阶与背景区高度差：Δφ = %.4f rad\n', delta_phi_center_bg);
